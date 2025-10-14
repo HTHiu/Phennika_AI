@@ -12,7 +12,7 @@ class MyData(Dataset):
         super().__init__()
         df = pd.read_csv(csv_path)
 
-        self.texts = str(df["Review"])
+        self.texts = df["Review"].astype(str).tolist()
 
         y = df[LABEL_COLS].values
         self.labels = torch.tensor(y, dtype=torch.float)   # [N]
