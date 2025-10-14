@@ -1,2 +1,2 @@
-# Phennika_AI
+# Phennikaa_AI
 Model_phannhan
