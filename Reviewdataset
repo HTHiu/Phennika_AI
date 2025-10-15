@@ -1,0 +1,27 @@
+class ReviewDataset(Dataset):
+    def __init__(self, df: pd.DataFrame, tokenizer: AutoTokenizer, max_len=MAX_LEN):
+        self.texts = df['text'].astype(str).tolist()
+        self.sentiments = []  # list of lists length NUM_LABELS, values 0-5
+        for _, row in df.iterrows():
+            s_cols = ['s_giai_tri', 's_luu_tru', 's_nha_hang', 's_an_uong', 's_van_chuyen', 's_mua_sam']
+            sent_row = []
+            for c in s_cols:
+                v = row.get(c, 0)
+                try:
+                    vi = int(v)
+                except:
+                    vi = 0
+                sent_row.append(vi)  # 0-5
+            self.sentiments.append(sent_row)
+        self.tokenizer = tokenizer
+        self.max_len = max_len
+
+    def __len__(self):
+        return len(self.texts)
+
+    def __getitem__(self, idx):
+        text = self.texts[idx]
+        enc = self.tokenizer(text, truncation=True, padding='max_length', max_length=self.max_len, return_tensors="pt")
+        item = {k: v.squeeze(0) for k, v in enc.items()}
+        item['sentiments'] = torch.tensor(self.sentiments[idx], dtype=torch.long)  # shape (NUM_LABELS,)
+        return item
