@@ -1,0 +1,19 @@
+class MultiTaskModel(nn.Module):
+    def __init__(self, model_name=MODEL_NAME, num_labels=NUM_LABELS, num_sent_classes=NUM_SENT_CLASSES, dropout=0.1):
+        super().__init__()
+        self.encoder = AutoModel.from_pretrained(model_name)
+        hidden = self.encoder.config.hidden_size
+        self.dropout = nn.Dropout(dropout)
+        self.sent_head = nn.Linear(hidden, num_labels * num_sent_classes)
+        self.num_labels = num_labels
+        self.num_sent_classes = num_sent_classes
+
+    def forward(self, input_ids, attention_mask):
+        out = self.encoder(input_ids=input_ids, attention_mask=attention_mask)
+        pooled = out.last_hidden_state.mean(dim=1)  # Mean pooling
+        pooled = self.dropout(pooled)
+        sent_logits = self.sent_head(pooled)  # (B, L*C)
+        sent_logits = sent_logits.view(-1, self.num_labels, self.num_sent_classes)  # (B, L, C)
+        return sent_logits
+
+
