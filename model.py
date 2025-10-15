@@ -28,12 +28,12 @@ MODEL_NAME = "vinai/phobert-base"
 NUM_LABELS = 6
 NUM_SENT_CLASSES = 6  # 0-5, 0 means not mentioned
 MAX_LEN = 256
-BATCH_SIZE = 4  # Reduced to avoid OOM
-GRAD_ACCUM_STEPS = 4  # Gradient accumulation steps to increase effective batch size
-LR = 1e-5  # Lower LR for stability
-EPOCHS = 30  # Increased epochs for better convergence
+BATCH_SIZE = 8  # Reduced to avoid OOM
+GRAD_ACCUM_STEPS = 2  # Gradient accumulation steps to increase effective batch size
+LR = 2e-5  # Lower LR for stability
+EPOCHS = 20  # Increased epochs for better convergence
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-WEIGHT_DECAY = 1e-2  # Added weight decay
+WEIGHT_DECAY = 1e-3  # Added weight decay
 GRAD_CLIP = 1.0  # Gradient clipping
 
 LABEL_NAMES = ["giai_tri","luu_tru","nha_hang","an_uong","van_chuyen","mua_sam"]
@@ -69,7 +69,7 @@ KEYWORD_MAP = {
         "trà sữa", "nước ép", "sinh tố", "bánh mì", "phở", "cơm", "đồ ăn vặt", "snack", 
         "rau củ quả", "mang về", "take away", "delivery", "uống", "cà phê take away", 
         "lò vi sóng", "quán nước", "tiệm bánh", "xe đẩy", "căn tin", "quầy bar", "ẩm thực đường phố",
-        "đặt món"
+        "đặt món","cơm","gà ","cá","thịt","review","tôm",
     ],
     5: [
         "taxi", "grab", "xe bus", "xe buýt", "tàu", "phương tiện", "giao thông", "sân bay", 
@@ -80,10 +80,11 @@ KEYWORD_MAP = {
     ],
     6: [
         "mua sắm", "cửa hàng", "shop", "shopping", "quầy", "trung tâm thương mại", "mall", 
-        "giá cả", "ưu đãi", "siêu thị", "chợ", "tạp hóa", "shop online", "e-commerce", "store", 
+        "giá cả", "ưu đãi","gu", "siêu thị", "chợ", "tạp hóa", "shop online", "e-commerce", "store", 
         "boutique", "tttm", "khuyến mãi", "sale", "giảm giá", "thanh toán", "đặt hàng", 
         "invoice", "hóa đơn", "trả hàng", "đổi trả", "hàng hóa", "quần áo", "thời trang", 
-        "điện thoại", "đồ gia dụng", "mỹ phẩm", "sản phẩm", "săn sale", "thanh lý"
+        "điện thoại", "đồ gia dụng", "mỹ phẩm", "sản phẩm", "săn sale", "thanh lý","quần áo","giày",
+        "dép","phụ kiện","sale",
     ]
 }
 
@@ -91,19 +92,21 @@ KEYWORD_MAP = {
 SENTIMENT_LEXICON = {
     # STRONG POSITIVE +2
     "tuyệt vời": 2, "tuyệt quá": 2, "hoàn hảo": 2, "xuất sắc": 2, "siêu": 2, "siêu ngon": 2,"nèeeee":2,"nè ":2,
-    "rất hài lòng": 2, "đỉnh": 2, "đỉnh cao": 2, "đỉnh của chóp": 2, "không thể tốt hơn": 2,
+    "rất hài lòng": 2, "đỉnh": 2, "đỉnh cao": 2, "đỉnh của chóp": 2, "không thể tốt hơn": 2,"mong chờ":1.5,
     "không chê vào đâu được": 2, "perfect": 2, "tuyệt vời quá": 2, "quá tuyệt": 2, "đáng khen": 2,
 
     # POSITIVE +1
     "tốt": 1, "rất tốt": 1.5, "ngon": 1, "ngon miệng": 1, "ngon quá": 1.5, "đẹp": 1,"đáng": 1,
-    "đẹp quá": 1.5, "thoải mái": 1, "nhanh": 1, "rẻ": 1, "hợp lý": 1, "sạch": 1,
+    "đẹp quá": 1.5, "thoải mái": 1, "nhanh": 1, "rẻ": 1, "hợp lý": 1, "sạch": 1,"thân thiện":1,"dễ thương":1,
     "tiện lợi": 1, "ổn": 1, "hài lòng": 1, "đáng tiền": 1, "đáng mua": 1, "phục vụ tốt": 1,
-    "nhanh": 1, "giao nhanh": 1.2, "đúng mô tả": 1,"mạnh" :1 ,"nhanh":1,
+    "nhanh": 1, "giao nhanh": 1.2, "đúng mô tả": 1,"mạnh" :1 ,"nhanh":1,"nên":1,"không quá":1,
+    "nhưng được":1,"gọn":0.5,"sạch":1,"đúng giờ ":1,"thơm":1,"không lo":1,"nhiều":1,"tươi":1,
 
     # NEGATIVE -1
     "kém": -1, "tệ": -1, "tệ quá": -1.5, "chậm": -1, "giao hàng chậm": -1,"delay ":-1,"fail" :-1,"dở " :-1,
-    "đắt": -1, "xấu": -1, "không tốt": -1, "không ổn": -1, "không hài lòng": -1,"nhưng":-1,
-    "phục vụ kém": -1, "không như mô tả": -1, "hơi tệ": -0.7, "khá tệ": -1,"chán":-1 ,
+    "đắt": -1, "xấu": -1, "không tốt": -1, "không ổn": -1, "không hài lòng": -1,"nhưng":-0.5
+    "phục vụ kém": -1, "không như mô tả": -1, "hơi tệ": -0.7, "khá tệ": -1,"chán":-1 ,"không ngon":-1,
+    "không đặc sắc":-1,
 
     # STRONG NEGATIVE -2
     "thất vọng": -2, "hỏng": -2, "bẩn": -2, "kinh khủng": -2, "tồi tệ": -2,
@@ -180,9 +183,9 @@ def apply_keyword_mapping_to_text(text: str,
             avg_score = score_sums[lab] / count_occ[lab]
             if avg_score >= 2:
                 star = 5
-            elif avg_score >= 0.5:
+            elif avg_score >= 1.25:
                 star = 4
-            elif avg_score > -1:
+            elif avg_score > 0:
                 star = 3
             elif avg_score > -2:
                 star = 2
