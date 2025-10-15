@@ -28,10 +28,10 @@ MODEL_NAME = "vinai/phobert-base"
 NUM_LABELS = 6
 NUM_SENT_CLASSES = 6  # 0-5, 0 means not mentioned
 MAX_LEN = 256
-BATCH_SIZE = 2  # Reduced to avoid OOM
+BATCH_SIZE = 4  # Reduced to avoid OOM
 GRAD_ACCUM_STEPS = 4  # Gradient accumulation steps to increase effective batch size
 LR = 1e-5  # Lower LR for stability
-EPOCHS = 20  # Increased epochs for better convergence
+EPOCHS = 30  # Increased epochs for better convergence
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 WEIGHT_DECAY = 1e-2  # Added weight decay
 GRAD_CLIP = 1.0  # Gradient clipping
@@ -43,12 +43,48 @@ LABEL_NAMES = ["giai_tri","luu_tru","nha_hang","an_uong","van_chuyen","mua_sam"]
 # -------------------------
 # Map label index (1..6) to keyword list (lowercase phrases)
 KEYWORD_MAP = {
-    1: ["wifi", "wi-fi", "hồ bơi", "pool", "khu vui chơi", "khu giải trí", "sân chơi", "bãi biển", "tour", "show", "vé tham quan"],
-    2: ["khách sạn", "resort", "homestay", "phòng", "check-in", "check out", "room", "villa", "lưu trú", "nhà nghỉ"],
-    3: ["nhà hàng", "nhà hàng sang", "ẩm thực", "quán ăn cao cấp", "fine dining", "nhà hàng", "set menu", "chef"],
-    4: ["đồ ăn", "thức uống", "món", "ăn uống", "cafe", "quán ăn", "buffet", "bữa sáng"],
-    5: ["taxi", "grab", "xe bus", "xe buýt", "tàu", "phương tiện", "giao thông", "sân bay", "đi lại", "xe máy", "thuê xe"],
-    6: ["mua sắm", "cửa hàng", "shop", "shopping", "quầy", "trung tâm thương mại", "mall", "giá cả", "ưu đãi"]
+    1: [
+        "wifi", "wi-fi", "hồ bơi", "pool", "khu vui chơi", "khu giải trí", "sân chơi", "bãi biển", 
+        "tour", "show", "vé tham quan", "gym", "spa", "massage", "xông hơi", "bi-a", "bida", 
+        "sân golf", "game center", "phòng karaoke", "rạp chiếu phim", "phòng trà", "quán bar", 
+        "pub", "khu du lịch", "công viên nước", "e-ticket", "thẻ thành viên", "lượt chơi", 
+        "chương trình ca nhạc", "workshop", "event", "sự kiện", "kịch", "triển lãm"
+    ],
+    2: [
+        "khách sạn", "resort", "homestay", "phòng", "check-in", "check out", "room", "villa", 
+        "lưu trú", "nhà nghỉ", "căn hộ dịch vụ", "chung cư", "hostel", "dorm", "b&b", 
+        "khu nghỉ dưỡng", "đặt phòng", "ota", "giá phòng", "view", "hạng phòng", "suite", 
+        "gia hạn", "khăn tắm", "dọn phòng", "agoda", "booking", "airbnb", "traveloka",
+        "ở trọ", "thuê phòng"
+    ],
+    3: [
+        "nhà hàng", "nhà hàng sang", "ẩm thực", "quán ăn cao cấp", "fine dining", "set menu", 
+        "chef", "buffet", "lẩu", "nướng", "quán hải sản", "quán ăn nhật", "quán ăn hàn", 
+        "quán ăn âu", "quán nhậu", "tiệc cưới", "menu", "thực đơn", "đầu bếp", "sommelier", 
+        "phục vụ", "bàn ăn", "đặt bàn", "voucher ăn uống", "không gian ẩm thực", "cao cấp", 
+        "sang trọng", "hạng sang", "món khai vị", "món tráng miệng", "đặt tiệc"
+    ],
+    4: [
+        "đồ ăn", "thức uống", "món", "ăn uống", "cafe", "quán ăn", "buffet", "bữa sáng", 
+        "trà sữa", "nước ép", "sinh tố", "bánh mì", "phở", "cơm", "đồ ăn vặt", "snack", 
+        "rau củ quả", "mang về", "take away", "delivery", "uống", "cà phê take away", 
+        "lò vi sóng", "quán nước", "tiệm bánh", "xe đẩy", "căn tin", "quầy bar", "ẩm thực đường phố",
+        "đặt món"
+    ],
+    5: [
+        "taxi", "grab", "xe bus", "xe buýt", "tàu", "phương tiện", "giao thông", "sân bay", 
+        "đi lại", "xe máy", "thuê xe", "xe khách", "xe limousine", "xe buýt nhanh", "brt", 
+        "tàu điện", "giao hàng", "chuyển phát nhanh", "xe tải", "bến xe", "ga tàu", "bến cảng", 
+        "lịch trình", "cước phí", "shipper", "chuyến bay", "cảng hàng không", "gojek", "be", 
+        "ahamove", "j&t", "viettel post", "busmap", "tài xế", "lộ trình", "vận tải"
+    ],
+    6: [
+        "mua sắm", "cửa hàng", "shop", "shopping", "quầy", "trung tâm thương mại", "mall", 
+        "giá cả", "ưu đãi", "siêu thị", "chợ", "tạp hóa", "shop online", "e-commerce", "store", 
+        "boutique", "tttm", "khuyến mãi", "sale", "giảm giá", "thanh toán", "đặt hàng", 
+        "invoice", "hóa đơn", "trả hàng", "đổi trả", "hàng hóa", "quần áo", "thời trang", 
+        "điện thoại", "đồ gia dụng", "mỹ phẩm", "sản phẩm", "săn sale", "thanh lý"
+    ]
 }
 
 # Improved sentiment lexicon with scores: +2 strong pos, +1 pos, 0 neutral, -1 neg, -2 strong neg
@@ -374,7 +410,7 @@ def load_and_apply_rules(csv_path: str, apply_rules=True, overwrite=False) -> pd
 # -------------------------
 def predict_texts(model, tokenizer, texts: List[str]):
     model.eval()
-    batch_size = 16  # Adjust based on memory
+    batch_size = 4  # Adjust based on memory
     outputs = []
     for start in range(0, len(texts), batch_size):
         end = min(start + batch_size, len(texts))
@@ -403,8 +439,8 @@ def main():
     tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME, use_fast=False)
     
     # Set paths for Kaggle
-    train_csv = '/kaggle/input/file123/train.csv'  # Corrected path based on your dataset name
-    test_csv = '/kaggle/input/file123/test.csv'  # Assuming test.csv is in the same directory
+    train_csv = '/kaggle/input/file12/train.csv'  # Corrected path based on your dataset name
+    test_csv = '/kaggle/input/file12/test.csv'  # Assuming test.csv is in the same directory
     model_path = '/kaggle/working/best_model.pt'  # Save model in /kaggle/working (downloadable after)
     submission_path = '/kaggle/working/submission13.csv'
     
