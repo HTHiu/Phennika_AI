@@ -9,3 +9,19 @@ from torch.amp import GradScaler, autocast
 from sklearn.metrics import f1_score, accuracy_score, mean_absolute_error
 import os
 from typing import List, Dict, Tuple  # Ensure List is imported
+
+# -------------------------
+# Config / Hyperparams
+# -------------------------
+MODEL_NAME = "vinai/phobert-base"
+NUM_LABELS = 6
+NUM_SENT_CLASSES = 6  # 0-5, 0 means not mentioned
+MAX_LEN = 256
+BATCH_SIZE = 2  # Reduced to avoid OOM
+LR = 1e-5  # Lower LR for stability
+EPOCHS = 4  # Increased epochs for better convergence
+DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+WEIGHT_DECAY = 1e-2  # Added weight decay
+GRAD_CLIP = 1.0  # Gradient clipping
+
+LABEL_NAMES = ["giai_tri", "luu_tru", "nha_hang", "an_uong", "van_chuyen", "mua_sam"]
