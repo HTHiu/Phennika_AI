@@ -1,4 +1,3 @@
-# Cell 2: Copy toàn bộ code model (từ import đến main, nhưng loại bỏ if __name__ và parser)
 """
 Multi-task model simplified to predict sentiment scores (0-5) per label, where 0 means not mentioned.
 """
@@ -17,6 +16,7 @@ from torch.utils.data import Dataset, DataLoader
 from transformers import AutoTokenizer, AutoModel, get_linear_schedule_with_warmup
 from torch.optim import AdamW
 import torch.nn.functional as F
+from torch.amp import GradScaler, autocast
 
 # Optional metrics
 from sklearn.metrics import f1_score, accuracy_score, mean_absolute_error
@@ -28,9 +28,10 @@ MODEL_NAME = "vinai/phobert-base"
 NUM_LABELS = 6
 NUM_SENT_CLASSES = 6  # 0-5, 0 means not mentioned
 MAX_LEN = 256
-BATCH_SIZE = 16  # Increased for better gradient estimates
+BATCH_SIZE = 2  # Reduced to avoid OOM
+GRAD_ACCUM_STEPS = 4  # Gradient accumulation steps to increase effective batch size
 LR = 1e-5  # Lower LR for stability
-EPOCHS = 5  # Increased epochs for better convergence
+EPOCHS = 20  # Increased epochs for better convergence
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 WEIGHT_DECAY = 1e-2  # Added weight decay
 GRAD_CLIP = 1.0  # Gradient clipping
@@ -52,16 +53,30 @@ KEYWORD_MAP = {
 
 # Improved sentiment lexicon with scores: +2 strong pos, +1 pos, 0 neutral, -1 neg, -2 strong neg
 SENTIMENT_LEXICON = {
-    # Strong positive +2
-    "tuyệt vời": 2, "hoàn hảo": 2, "xuất sắc": 2, "tuyệt": 2, "siêu": 2,
-    # Positive +1
-    "tốt": 1, "ngon": 1, "đẹp": 1, "thoải mái": 1, "nhanh": 1, "rẻ": 1, "sạch": 1, "tiện lợi": 1,
-    # Neutral 0
-    "ổn": 0, "ok": 0, "bình thường": 0, "tạm": 0,
-    # Negative -1
-    "kém": -1, "tệ": -1, "chậm": -1, "đắt": -1, "xấu": -1, "không tốt": -1, "không ổn": -1,
-    # Strong negative -2
-    "thất vọng": -2, "hỏng": -2, "bẩn": -2, "kinh khủng": -2, "tồi tệ": -2, "rất kém": -2
+    # STRONG POSITIVE +2
+    "tuyệt vời": 2, "tuyệt quá": 2, "hoàn hảo": 2, "xuất sắc": 2, "siêu": 2, "siêu ngon": 2,"nèeeee":2,"nè ":2,
+    "rất hài lòng": 2, "đỉnh": 2, "đỉnh cao": 2, "đỉnh của chóp": 2, "không thể tốt hơn": 2,
+    "không chê vào đâu được": 2, "perfect": 2, "tuyệt vời quá": 2, "quá tuyệt": 2, "đáng khen": 2,
+
+    # POSITIVE +1
+    "tốt": 1, "rất tốt": 1.5, "ngon": 1, "ngon miệng": 1, "ngon quá": 1.5, "đẹp": 1,"đáng": 1,
+    "đẹp quá": 1.5, "thoải mái": 1, "nhanh": 1, "rẻ": 1, "hợp lý": 1, "sạch": 1,
+    "tiện lợi": 1, "ổn": 1, "hài lòng": 1, "đáng tiền": 1, "đáng mua": 1, "phục vụ tốt": 1,
+    "nhanh": 1, "giao nhanh": 1.2, "đúng mô tả": 1,"mạnh" :1 ,"nhanh":1,
+
+    # NEGATIVE -1
+    "kém": -1, "tệ": -1, "tệ quá": -1.5, "chậm": -1, "giao hàng chậm": -1,"delay ":-1,"fail" :-1,"dở " :-1,
+    "đắt": -1, "xấu": -1, "không tốt": -1, "không ổn": -1, "không hài lòng": -1,"nhưng":-1,
+    "phục vụ kém": -1, "không như mô tả": -1, "hơi tệ": -0.7, "khá tệ": -1,"chán":-1 ,
+
+    # STRONG NEGATIVE -2
+    "thất vọng": -2, "hỏng": -2, "bẩn": -2, "kinh khủng": -2, "tồi tệ": -2,
+    "rất kém": -2, "không đáng tiền": -2, "lừa đảo": -2, "chỉ muốn hoàn tiền": -2,
+    "rác": -2, "scam": -2, "muốn trả lại": -2,
+
+    # EMOJI / EMOTICON
+    "😍": 2, "😃": 2, "😊": 1.5, "👍": 1, "👌": 1, "😂": 1, "😡": -2, "😞": -2, "👎": -1,
+
 }
 
 # We will treat multi-word patterns too; make a compiled regex for each keyword for word-boundary matching
@@ -127,19 +142,19 @@ def apply_keyword_mapping_to_text(text: str,
     for lab in count_occ:
         if count_occ[lab] > 0:
             avg_score = score_sums[lab] / count_occ[lab]
-            if avg_score >= 1.5:
+            if avg_score >= 2:
                 star = 5
             elif avg_score >= 0.5:
                 star = 4
-            elif avg_score > -0.5:
+            elif avg_score > -1:
                 star = 3
-            elif avg_score > -1.5:
+            elif avg_score > -2:
                 star = 2
             else:
                 star = 1
             sentiments[lab] = star
 
-    return sentiments
+    return sentiments 
 
 def apply_keyword_mapping_row(row, compiled_patterns=COMPILED_KEYWORD_PATTERNS, overwrite=False):
     """
@@ -247,22 +262,29 @@ def train_epoch(model, dataloader, optimizer, scheduler=None):
     model.train()
     total_loss = 0.0
     total_sent_loss = 0.0
-    for batch in dataloader:
+    scaler = GradScaler()
+    optimizer.zero_grad()
+    for step, batch in enumerate(dataloader):
         input_ids = batch['input_ids'].to(DEVICE)
         attention_mask = batch['attention_mask'].to(DEVICE)
         sentiments = batch['sentiments'].to(DEVICE)
-        optimizer.zero_grad()
-        sent_logits = model(input_ids=input_ids, attention_mask=attention_mask)
-        loss, l_sent = compute_loss(sent_logits, sentiments)
-        loss.backward()
-        torch.nn.utils.clip_grad_norm_(model.parameters(), GRAD_CLIP)  # Added gradient clipping
-        optimizer.step()
-        if scheduler:
-            scheduler.step()
+        with autocast(device_type='cuda'):
+            sent_logits = model(input_ids=input_ids, attention_mask=attention_mask)
+            loss, l_sent = compute_loss(sent_logits, sentiments)
+        loss = loss / GRAD_ACCUM_STEPS
+        scaler.scale(loss).backward()
         total_loss += loss.item()
-        total_sent_loss += l_sent
+        total_sent_loss += l_sent / GRAD_ACCUM_STEPS
+        if (step + 1) % GRAD_ACCUM_STEPS == 0:
+            scaler.unscale_(optimizer)
+            torch.nn.utils.clip_grad_norm_(model.parameters(), GRAD_CLIP)
+            scaler.step(optimizer)
+            scaler.update()
+            if scheduler:
+                scheduler.step()
+            optimizer.zero_grad()
     n = len(dataloader)
-    return total_loss/n, total_sent_loss/n
+    return total_loss / n * GRAD_ACCUM_STEPS, total_sent_loss / n * GRAD_ACCUM_STEPS
 
 def eval_model(model, dataloader):
     model.eval()
@@ -304,6 +326,15 @@ def eval_model(model, dataloader):
         mae = mean_absolute_error(all_true_sents, all_pred_sents)
         acc = accuracy_score(all_true_sents, all_pred_sents)
         results.update({'sent_mae': float(mae), 'sent_acc': float(acc)})
+    
+    # Thêm tính điểm theo yêu cầu (dựa vào hình ảnh/mô tả)
+    # Sentiment Score = sent_acc * 0.4 (trọng số 40%)
+    # Micro-F1 Score = label_micro_f1 * 0.6 (trọng số 60%)
+    # Total Score = tổng hai cái trên
+    results['sentiment_score'] = results.get('sent_acc', 0.0) * 0.4
+    results['micro_f1_score'] = results['label_micro_f1'] * 0.6
+    results['total_score'] = results['sentiment_score'] + results['micro_f1_score']
+    
     return results
 
 # -------------------------
@@ -314,14 +345,16 @@ def load_and_apply_rules(csv_path: str, apply_rules=True, overwrite=False) -> pd
     # Rename 'Review' to 'text'
     if 'Review' in df.columns:
         df = df.rename(columns={'Review': 'text'})
+    if 'review' in df.columns:
+        df = df.rename(columns={'review': 'text'})
     # Rename sentiment columns to match expected names (remove '# ' or '#' if present)
     rename_dict = {
-        '# giai_tri': 's_giai_tri',
-        '# luu_tru': 's_luu_tru',
-        '# nha_hang': 's_nha_hang',
-        '# an_uong': 's_an_uong',
-        '# van_chuyen': 's_van_chuyen',
-        '# mua_sam': 's_mua_sam'
+        'giai_tri': 's_giai_tri',
+        'luu_tru': 's_luu_tru',
+        'nha_hang': 's_nha_hang',
+        'an_uong': 's_an_uong',
+        'van_chuyen': 's_van_chuyen',
+        'mua_sam': 's_mua_sam'
     }
     df = df.rename(columns=rename_dict)
     # ensure sentiment columns exist
@@ -341,21 +374,26 @@ def load_and_apply_rules(csv_path: str, apply_rules=True, overwrite=False) -> pd
 # -------------------------
 def predict_texts(model, tokenizer, texts: List[str]):
     model.eval()
-    enc = tokenizer(texts, truncation=True, padding=True, max_length=MAX_LEN, return_tensors="pt")
-    input_ids = enc['input_ids'].to(DEVICE)
-    attention_mask = enc['attention_mask'].to(DEVICE)
-    with torch.no_grad():
-        sent_logits = model(input_ids=input_ids, attention_mask=attention_mask)
-        sent_preds = torch.argmax(sent_logits, dim=-1).cpu().numpy()  # 0-5
+    batch_size = 16  # Adjust based on memory
     outputs = []
-    for i, t in enumerate(texts):
-        labs = [LABEL_NAMES[j] for j in range(NUM_LABELS) if sent_preds[i, j] > 0]
-        sdict = {}
-        for j in range(NUM_LABELS):
-            pred = int(sent_preds[i, j])
-            if pred > 0:
-                sdict[LABEL_NAMES[j]] = pred
-        outputs.append({'text': t, 'labels': labs, 'sentiments': sdict})
+    for start in range(0, len(texts), batch_size):
+        end = min(start + batch_size, len(texts))
+        batch_texts = texts[start:end]
+        enc = tokenizer(batch_texts, truncation=True, padding=True, max_length=MAX_LEN, return_tensors="pt")
+        input_ids = enc['input_ids'].to(DEVICE)
+        attention_mask = enc['attention_mask'].to(DEVICE)
+        with torch.no_grad():
+            with autocast(device_type='cuda'):
+                sent_logits = model(input_ids=input_ids, attention_mask=attention_mask)
+            sent_preds = torch.argmax(sent_logits, dim=-1).cpu().numpy()  # (B, L)
+        for i in range(len(batch_texts)):
+            sdict = {}
+            for j in range(NUM_LABELS):
+                pred = int(sent_preds[i, j])
+                if pred > 0:
+                    sdict[LABEL_NAMES[j]] = pred
+            outputs.append({'text': batch_texts[i], 'sentiments': sdict})
+        torch.cuda.empty_cache()  # Clear memory after each batch
     return outputs
 
 # -------------------------
@@ -365,8 +403,10 @@ def main():
     tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME, use_fast=False)
     
     # Set paths for Kaggle
-    train_csv = '/kaggle/input/train-model/train.csv'  # Corrected path based on your dataset name
+    train_csv = '/kaggle/input/file123/train.csv'  # Corrected path based on your dataset name
+    test_csv = '/kaggle/input/file123/test.csv'  # Assuming test.csv is in the same directory
     model_path = '/kaggle/working/best_model.pt'  # Save model in /kaggle/working (downloadable after)
+    submission_path = '/kaggle/working/submission12.csv'
     
     print("Loading training data and applying keyword rules...")
     df = load_and_apply_rules(train_csv, apply_rules=True, overwrite=False)
@@ -397,6 +437,31 @@ def main():
             torch.save({'model_state': model.state_dict(), 'tokenizer': tokenizer.__dict__}, model_path)
             print(f"  Saved best model to {model_path}")
     print("Training finished.")
+    
+    # Load best model for prediction
+    print("Loading best model for prediction...")
+    model = MultiTaskModel().to(DEVICE)
+    checkpoint = torch.load(model_path, weights_only=False)  # Sửa lỗi bằng cách thêm weights_only=False
+    model.load_state_dict(checkpoint['model_state'])
+    
+    # Load test data
+    print("Loading test data...")
+    df_test = load_and_apply_rules(test_csv, apply_rules=True, overwrite=False)
+    
+    texts = df_test['text'].astype(str).tolist()
+    
+    # Predict
+    preds = predict_texts(model, tokenizer, texts)
+    
+    # Create output DataFrame
+    output_data = []
+    for i, p in enumerate(preds, start=1):
+        scores = [p['sentiments'].get(label, 0) for label in LABEL_NAMES]
+        output_data.append([i] + scores)
+    
+    out_df = pd.DataFrame(output_data, columns=['stt'] + LABEL_NAMES)
+    out_df.to_csv(submission_path, index=False)
+    print(f"Saved predictions to {submission_path}")
 
 # Chạy main
 main()
