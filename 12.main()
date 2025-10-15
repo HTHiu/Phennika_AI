@@ -1,0 +1,60 @@
+def main():
+    tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME, use_fast=False)
+    train_csv = '/kaggle/input/file12/train.csv'
+    test_csv = '/kaggle/input/file12/test.csv'
+    model_path = '/kaggle/working/best_model.pt'
+    submission_path = '/kaggle/working/submission116.csv'
+
+    print("Loading training data...")
+    df = load_data(train_csv)
+    df = df.sample(frac=1.0, random_state=42).reset_index(drop=True)
+    n = len(df)
+    n_val = max(1, int(0.1 * n))
+    df_train = df.iloc[n_val:]
+    df_val = df.iloc[:n_val]
+    train_ds = ReviewDataset(df_train, tokenizer, max_len=MAX_LEN)
+    val_ds = ReviewDataset(df_val, tokenizer, max_len=MAX_LEN)
+    train_loader = DataLoader(train_ds, batch_size=BATCH_SIZE, shuffle=True)
+    val_loader = DataLoader(val_ds, batch_size=BATCH_SIZE, shuffle=False)
+    model = MultiTaskModel().to(DEVICE)
+    optimizer = AdamW(model.parameters(), lr=LR, weight_decay=WEIGHT_DECAY)
+    total_steps = len(train_loader) * EPOCHS
+    scheduler = get_linear_schedule_with_warmup(optimizer, num_warmup_steps=int(0.05*total_steps), num_training_steps=total_steps)
+    best_val = -1.0
+    for epoch in range(EPOCHS):
+        tr_loss, tr_sent_loss = train_epoch(model, train_loader, optimizer, scheduler)
+        val_metrics = eval_model(model, val_loader)
+        print(f"Epoch {epoch+1}/{EPOCHS} - train_loss: {tr_loss:.4f}, sent_loss: {tr_sent_loss:.4f}")
+        print(f"  Val metrics: {val_metrics}")
+        score = val_metrics.get('total_score', 0.0)
+        if score > best_val:
+            best_val = score
+            torch.save({'model_state': model.state_dict(), 'tokenizer': tokenizer.__dict__}, model_path)
+            print(f"  Saved best model to {model_path} with total_score: {score:.4f}")
+    
+    print("Training finished.")
+    torch.cuda.empty_cache()
+
+    print("Loading best model for prediction...")
+    if not os.path.exists(model_path):
+        raise FileNotFoundError(f"Model file {model_path} not found!")
+    model = MultiTaskModel().to(DEVICE)
+    checkpoint = torch.load(model_path, weights_only=False)
+    model.load_state_dict(checkpoint['model_state'])
+
+    print("Loading test data...")
+    df_test = load_data(test_csv)
+    texts = df_test['text'].astype(str).tolist()
+    preds = predict_texts(model, tokenizer, texts)
+
+    output_data = []
+    for i, p in enumerate(preds, start=1):
+        scores = [p['sentiments'].get(label, 0) for label in LABEL_NAMES]
+        output_data.append([i] + scores)
+    
+    out_df = pd.DataFrame(output_data, columns=['stt'] + LABEL_NAMES)
+    out_df.to_csv(submission_path, index=False)
+    print(f"Saved predictions to {submission_path}")
+
+# Run main
+main()
