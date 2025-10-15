@@ -1,0 +1,136 @@
+# -------------------------
+# Loss helper
+# -------------------------
+def compute_loss(sent_logits, sentiments):
+    sent_loss_fn = nn.CrossEntropyLoss()
+    B, L, C = sent_logits.shape
+    sent_logits_flat = sent_logits.view(B*L, C)
+    sentiments_flat = sentiments.view(B*L)
+    loss_sent = sent_loss_fn(sent_logits_flat, sentiments_flat)
+    return loss_sent, loss_sent.detach().item()
+
+# -------------------------
+# Train / Eval loops
+# -------------------------
+def train_epoch(model, dataloader, optimizer, scheduler=None):
+    model.train()
+    total_loss = 0.0
+    total_sent_loss = 0.0
+    scaler = GradScaler()
+    for batch in dataloader:
+        input_ids = batch['input_ids'].to(DEVICE)
+        attention_mask = batch['attention_mask'].to(DEVICE)
+        sentiments = batch['sentiments'].to(DEVICE)
+        optimizer.zero_grad()
+        with autocast(device_type='cuda'):
+            sent_logits = model(input_ids=input_ids, attention_mask=attention_mask)
+            loss, l_sent = compute_loss(sent_logits, sentiments)
+        scaler.scale(loss).backward()
+        scaler.unscale_(optimizer)
+        torch.nn.utils.clip_grad_norm_(model.parameters(), GRAD_CLIP)
+        scaler.step(optimizer)
+        scaler.update()
+        if scheduler:
+            scheduler.step()
+        total_loss += loss.item()
+        total_sent_loss += l_sent
+    n = len(dataloader)
+    return total_loss/n, total_sent_loss/n
+
+def eval_model(model, dataloader):
+    model.eval()
+    all_true_labels = []
+    all_pred_labels = []
+    all_true_sents = []
+    all_pred_sents = []
+    with torch.no_grad():
+        for batch in dataloader:
+            input_ids = batch['input_ids'].to(DEVICE)
+            attention_mask = batch['attention_mask'].to(DEVICE)
+            sentiments = batch['sentiments'].cpu().numpy()  # 0-5
+            with autocast(device_type='cuda'):
+                sent_logits = model(input_ids=input_ids, attention_mask=attention_mask)
+            sent_preds = torch.argmax(sent_logits, dim=-1).cpu().numpy()  # 0-5
+            true_bin = (sentiments > 0).astype(int)
+            pred_bin = (sent_preds > 0).astype(int)
+            all_true_labels.append(true_bin)
+            all_pred_labels.append(pred_bin)
+            B, L = sentiments.shape
+            for i in range(B):
+                for j in range(L):
+                    if sentiments[i, j] > 0:
+                        all_true_sents.append(int(sentiments[i, j]))
+                        all_pred_sents.append(int(sent_preds[i, j]))
+    if len(all_true_labels) == 0:
+        return {}
+    y_true = np.vstack(all_true_labels)
+    y_pred = np.vstack (all_pred_labels)
+    micro_f1 = f1_score(y_true.reshape(-1), y_pred.reshape(-1), average='micro', zero_division=0)
+    macro_f1 = f1_score(y_true, y_pred, average='macro', zero_division=0)
+    results = {
+        'label_micro_f1': float(micro_f1),
+        'label_macro_f1': float(macro_f1)
+    }
+    if len(all_true_sents) > 0:
+        mae = mean_absolute_error(all_true_sents, all_pred_sents)
+        acc = accuracy_score(all_true_sents, all_pred_sents)
+        results.update({'sent_mae': float(mae), 'sent_acc': float(acc)})
+    results['sentiment_score'] = results.get('sent_acc', 0.0) * 0.4
+    results['micro_f1_score'] = results['label_micro_f1'] * 0.6
+    results['total_score'] = results['sentiment_score'] + results['micro_f1_score']
+    return results
+
+# -------------------------
+# Utilities: load data
+# -------------------------
+def load_data(csv_path: str) -> pd.DataFrame:
+    df = pd.read_csv(csv_path, encoding='utf-8-sig')
+    df.columns = [col.lstrip('\ufeff').strip() for col in df.columns]
+    if 'Review' in df.columns:
+        df = df.rename(columns={'Review': 'text'})
+    if 'review' in df.columns:
+        df = df.rename(columns={'review': 'text'})
+    rename_dict = {
+        'giai_tri': 's_giai_tri',
+        'luu_tru': 's_luu_tru',
+        'nha_hang': 's_nha_hang',
+        'an_uong': 's_an_uong',
+        'van_chuyen': 's_van_chuyen',
+        'mua_sam': 's_mua_sam'
+    }
+    df = df.rename(columns=rename_dict)
+    s_cols = ['s_giai_tri', 's_luu_tru', 's_nha_hang', 's_an_uong', 's_van_chuyen', 's_mua_sam']
+    for c in s_cols:
+        if c not in df.columns:
+            df[c] = 0
+    if 'labels' in df.columns:
+        df = df.drop(columns=['labels'])
+    print(f"Columns after loading: {df.columns.tolist()}")
+    return df
+
+# -------------------------
+# Prediction helper
+# -------------------------
+def predict_texts(model, tokenizer, texts: List[str]):
+    model.eval()
+    batch_size = 16
+    outputs = []
+    for start in range(0, len(texts), batch_size):
+        end = min(start + batch_size, len(texts))
+        batch_texts = texts[start:end]
+        enc = tokenizer(batch_texts, truncation=True, padding=True, max_length=MAX_LEN, return_tensors="pt")
+        input_ids = enc['input_ids'].to(DEVICE)
+        attention_mask = enc['attention_mask'].to(DEVICE)
+        with torch.no_grad():
+            with autocast(device_type='cuda'):
+                sent_logits = model(input_ids=input_ids, attention_mask=attention_mask)
+            sent_preds = torch.argmax(sent_logits, dim=-1).cpu().numpy()
+        for i in range(len(batch_texts)):
+            sdict = {}
+            for j in range(NUM_LABELS):
+                pred = int(sent_preds[i, j])
+                if pred > 0:
+                    sdict[LABEL_NAMES[j]] = pred
+            outputs.append({'text': batch_texts[i], 'sentiments': sdict})
+        torch.cuda.empty_cache()
+    return outputs
